@@ -125,7 +125,7 @@ async function sync() {
   if (!db.meta.url || !db.meta.token) { renderSync(); return; }
   if (syncing) { scheduleSync(); return; }
   if (!navigator.onLine) { renderSync(); return; }
-  syncing = true; syncError = ''; renderSync();
+  syncing = true; syncError = ''; render();
 
   const sentIds = [...db.meta.dirty];
   const sentDeletes = [...db.meta.deletes];
@@ -139,9 +139,15 @@ async function sync() {
   db.meta.stateDirty = false;
 
   try {
-    const res = await fetch(db.meta.url, { method: 'POST', body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error === 'unauthorized' ? 'Token tidak cocok' : data.error);
+    let res;
+    try {
+      res = await fetch(db.meta.url, { method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    } catch (e) {
+      throw new Error(e.name === 'TimeoutError' ? 'Tidak ada jawaban dalam 30 detik' : 'URL tidak bisa dihubungi (cek URL /exec & akses "Anyone")');
+    }
+    let data;
+    try { data = await res.json(); } catch { throw new Error('Jawaban bukan dari backend Yggdrasil (cek URL /exec & akses "Anyone")'); }
+    if (!data.ok) throw new Error(data.error === 'unauthorized' ? 'Token tidak cocok dengan TOKEN di Code.gs' : data.error);
 
     const stillDirty = db.meta.dirty.filter(id => !sentIds.includes(id) || (db.txns[id] && db.txns[id].updatedAt > (body.upserts.find(t => t.id === id)?.updatedAt || 0)));
     const keep = Object.fromEntries(stillDirty.filter(id => db.txns[id]).map(id => [id, db.txns[id]]));
@@ -341,10 +347,26 @@ function txItem(t, { showDate = false } = {}) {
 }
 
 function setupCard() {
+  let title = 'Rencanamu belum dimuat';
+  let body = 'Gaji, tagihan, dan target disimpan privat di Google Sheet-mu, bukan di aplikasi publik ini. Hubungkan ke Sheet untuk memuatnya.';
+  let button = '<button class="btn primary" data-action="settings" type="button">Hubungkan ke Google Sheet</button>';
+  if (db.meta.url && syncing) {
+    title = 'Menghubungi Google Sheet…';
+    body = 'Permintaan pertama ke Apps Script bisa makan waktu 5–15 detik.';
+    button = '';
+  } else if (db.meta.url && syncError) {
+    title = 'Gagal terhubung ke Google Sheet';
+    body = `Alasan: <b>${esc(syncError)}</b>. Cek lagi URL /exec & token di Pengaturan, dan pastikan deployment Apps Script diatur "Who has access: Anyone".`;
+    button = '<div class="btn-row"><button class="btn primary" data-action="sync" type="button">Coba lagi</button><button class="btn" data-action="settings" type="button">Pengaturan</button></div>';
+  } else if (db.meta.url && db.meta.lastSync) {
+    title = 'Terhubung, tapi rencana tidak ditemukan';
+    body = 'Sheet menjawab, tapi tidak mengirim rencana. Biasanya karena Apps Script masih menjalankan versi lama: di Apps Script buka <b>Deploy → Manage deployments → ✏️ → Version: New version → Deploy</b>, lalu tekan Coba lagi.';
+    button = '<button class="btn primary" data-action="sync" type="button">Coba lagi</button>';
+  }
   return `<div class="card stack">
-    <h3>Rencanamu belum dimuat</h3>
-    <p class="hint">Gaji, tagihan, dan target disimpan privat di Google Sheet-mu, bukan di aplikasi publik ini. Hubungkan ke Sheet untuk memuatnya.</p>
-    <button class="btn primary" data-action="settings" type="button">Hubungkan ke Google Sheet</button>
+    <h3>${title}</h3>
+    <p class="hint">${body}</p>
+    ${button}
   </div>`;
 }
 
