@@ -1,0 +1,32 @@
+{
+  "name": "Yggdrasil Finance",
+  "short_name": "Yggdrasil",
+  "description": "Catat pengeluaran secepat chat, pantau kuota mingguan dan tabungan.",
+  "lang": "id",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f4ef",
+  "theme_color": "#2f6b4f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Catat pengeluaran", "short_name": "Catat", "url": "./?catat=1", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "files": [
+        { "name": "file", "accept": ["text/plain", ".txt", "application/zip", ".zip"] }
+      ]
+    }
+  }
+}
