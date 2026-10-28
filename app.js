@@ -1,4 +1,4 @@
-import { parseLine, parseWhatsAppExport, categories, configureParser, pocketCategory } from './parser.js';
+import { parseLine, parseWhatsAppExport, categories, configureParser, pocketCategory, hash } from './parser.js';
 
 // ---------------------------------------------------------------------------
 // Rencana keuangan
@@ -726,6 +726,19 @@ function openImport(prefill = '') {
       const result = dlg.querySelector('[data-result]');
       const go = dlg.querySelector('[data-go]');
       let fresh = [];
+      let skippedRows = [];
+      // Perbaikan manual untuk baris yang dilewati: kunci "ts|baris asli" → teks pengganti.
+      const fixes = new Map();
+      const fixedTxns = () => skippedRows.flatMap(s => {
+        const value = fixes.get(s.ts + '|' + s.line);
+        const p = value && parseLine(value);
+        return p ? [{ id: 'wa-fix-' + hash(s.ts + '|' + s.line), ts: s.ts, raw: value, source: 'wa', ...p }] : [];
+      }).filter(t => !db.txns[t.id]);
+      const updateGo = () => {
+        const n = fresh.length + fixedTxns().length;
+        go.disabled = !n;
+        go.textContent = n ? `Import ${n} catatan` : 'Tidak ada yang baru';
+      };
 
       const analyse = () => {
         const raw = text.value;
@@ -735,21 +748,48 @@ function openImport(prefill = '') {
         const from = since.value;
         const inScope = transactions.filter(t => !from || t.ts.slice(0, 10) >= from);
         fresh = inScope.filter(t => !db.txns[t.id] && !tomb.has(t.id));
+        skippedRows = skipped.filter(s => !from || s.ts.slice(0, 10) >= from);
         const dup = inScope.length - fresh.length;
         const rev = fresh.filter(t => t.review).length;
-        go.disabled = !fresh.length;
-        go.textContent = fresh.length ? `Import ${fresh.length} catatan` : 'Tidak ada yang baru';
+        updateGo();
         result.innerHTML = `
           <div class="btn-row" style="margin-bottom:10px">
             <span class="chip good">${fresh.length} baru</span>
             <span class="chip">${dup} sudah ada</span>
             ${rev ? `<span class="chip warn">${rev} perlu dicek</span>` : ''}
-            <span class="chip">${skipped.length} baris bukan transaksi</span>
+            <span class="chip">${skippedRows.length} baris dilewati</span>
           </div>
           ${fresh.length ? `<ul class="tx-list preview-list">${fresh.slice().reverse().slice(0, 300).map(t => txItem(t, { showDate: true }).replace('data-action="edit"', 'disabled')).join('')}</ul>` : ''}
-          ${skipped.length ? `<details style="margin-top:10px"><summary>Lihat baris yang dilewati</summary><pre>${esc(skipped.slice(0, 200).map(s => s.line).join('\n'))}</pre></details>` : ''}
+          ${skippedRows.length ? `<details style="margin-top:10px"><summary>Lihat & perbaiki baris yang dilewati</summary>
+            <p class="hint" style="margin:8px 0">Saldo, pesan sistem grup, dan rincian struk memang sengaja dilewati. Kalau ada yang sebenarnya transaksi, ketik ulang di kotaknya, mis. <code>-171k belanja astro</code>.</p>
+            <div class="skip-list">${skippedRows.slice(0, 300).map(s => {
+              const key = s.ts + '|' + s.line;
+              const d = parseTs(s.ts);
+              return `<div class="skip-row">
+                <div class="small muted">${fmtDay(d)} · ${esc(s.line)}</div>
+                <input class="input" data-fix="${esc(key)}" value="${esc(fixes.get(key) || '')}" placeholder="Ketik ulang kalau ini transaksi">
+                <span class="small" data-fix-preview="${esc(key)}"></span>
+              </div>`;
+            }).join('')}</div>
+          </details>` : ''}
         `;
+        result.querySelectorAll('[data-fix]').forEach(inp => showFix(inp));
       };
+
+      const showFix = inp => {
+        const key = inp.dataset.fix;
+        const out = [...result.querySelectorAll('[data-fix-preview]')].find(el => el.dataset.fixPreview === key);
+        const p = inp.value.trim() && parseLine(inp.value);
+        out.innerHTML = !inp.value.trim() ? '' : p ? `<span class="chip good">${esc(p.category)} · ${rp(p.amount)}</span>` : '<span class="chip warn">Belum terbaca: awali dengan - atau + dan nominal</span>';
+      };
+
+      result.addEventListener('input', e => {
+        const inp = e.target.closest('[data-fix]');
+        if (!inp) return;
+        fixes.set(inp.dataset.fix, inp.value.trim());
+        showFix(inp);
+        updateGo();
+      });
 
       dlg.querySelector('[data-file]').addEventListener('change', async e => {
         const file = e.target.files[0];
@@ -759,10 +799,11 @@ function openImport(prefill = '') {
       text.addEventListener('input', analyse);
       since.addEventListener('change', analyse);
       go.addEventListener('click', () => {
-        putTxns(fresh);
+        const all = [...fresh, ...fixedTxns()];
+        putTxns(all);
         db.state.lastImport = new Date().toISOString();
         commit({ state: true });
-        toast(`${fresh.length} catatan masuk`);
+        toast(`${all.length} catatan masuk`);
         close();
       });
       if (prefill) analyse();
