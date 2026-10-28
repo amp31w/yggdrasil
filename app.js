@@ -65,13 +65,16 @@ const S = () => db.state.settings;
 const tripName = () => S().trip.label;
 const pocketName = p => (p === 'dd' ? 'Darurat' : tripName());
 
+// Kata kunci tagihan tetap di rencana hanya dipakai wizard gajian untuk deteksi "sudah dibayar",
+// bukan untuk kategori (mis. Gemini tetap masuk Langganan).
 function applyPlan() {
   const s = S();
-  const keywords = { ...s.keywords };
-  const fixedWords = s.fixed.flatMap(f => f.keywords || []);
-  if (fixedWords.length) keywords['Tagihan Tetap'] = [...(keywords['Tagihan Tetap'] || []), ...fixedWords];
-  configureParser({ tripLabel: s.trip.label, tripTags: s.trip.tags, keywords });
+  configureParser({ tripLabel: s.trip.label, tripTags: s.trip.tags, keywords: s.keywords });
 }
+
+// Kategori yang kena moratorium & ditampilkan bersama di pos bulanan.
+const HOBBY_CATS = ['Hobi & Gadget', 'Game'];
+const BUFFER_CATS = ['Lainnya', 'Kesehatan', 'Rumah Tangga'];
 
 function persist() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); } catch (e) { toast('Gagal menyimpan di perangkat: ' + e.message); }
@@ -173,11 +176,12 @@ async function sync() {
 }
 
 // Catatan yang diketik sebelum rencana termuat dibaca tanpa kata kunci & tag pribadi; baca ulang sekali.
+// Hanya catatan yang masih tebakan (perlu dicek); yang sudah dikonfirmasi atau diedit tidak disentuh.
 function reparseWithPlan() {
   applyPlan();
   const now = Date.now();
   Object.values(db.txns).forEach(t => {
-    if (!t.raw || !['app', 'wa'].includes(t.source)) return;
+    if (!t.review || !t.raw || !['app', 'wa'].includes(t.source)) return;
     const p = parseLine(t.raw);
     if (!p || (p.type === t.type && p.category === t.category && p.pocket === t.pocket)) return;
     db.txns[t.id] = { ...t, ...p, updatedAt: now };
@@ -286,7 +290,7 @@ function isMoratoriumBreach(t) {
   const m = S().moratorium;
   if (!m.limit || !m.start || !m.end) return false;
   const d = t.ts.slice(0, 10);
-  return t.type === 'keluar' && t.category === 'Hobi & Gadget' && t.amount > m.limit && d >= m.start && d <= m.end;
+  return t.type === 'keluar' && HOBBY_CATS.includes(t.category) && t.amount > m.limit && d >= m.start && d <= m.end;
 }
 
 function daysToDeparture() {
@@ -406,8 +410,8 @@ function renderHome() {
   }
 
   const monthlyCats = Object.keys(s.monthly);
-  const monthlyBy = c => sum(month.filter(t => t.type === 'keluar' && (c === 'Lainnya' ? ['Lainnya', 'Kesehatan'].includes(t.category) : t.category === c)));
-  const hobby = sum(month.filter(t => t.type === 'keluar' && t.category === 'Hobi & Gadget'));
+  const monthlyBy = c => sum(month.filter(t => t.type === 'keluar' && (c === 'Lainnya' ? BUFFER_CATS.includes(t.category) : t.category === c)));
+  const hobby = sum(month.filter(t => t.type === 'keluar' && HOBBY_CATS.includes(t.category)));
 
   el.innerHTML = `
     ${banners.join('')}
@@ -445,7 +449,7 @@ function renderHome() {
     <div class="card stack">
       <div class="card-head" style="margin:0"><h3>Pos bulanan · ${MONTHS_LONG[now.getMonth()]}</h3></div>
       ${monthlyCats.map(c => meter(c === 'Lainnya' ? 'Lain-lain & buffer' : c, monthlyBy(c), s.monthly[c])).join('')}
-      ${meter('Hobi & Gadget', hobby, 0, s.moratorium.limit ? ' <span class="chip warn">moratorium</span>' : '')}
+      ${meter('Game, Hobi & Gadget', hobby, 0, s.moratorium.limit ? ' <span class="chip warn">moratorium</span>' : '')}
     </div>
   `;
 }
@@ -483,7 +487,7 @@ function renderHistory() {
     </div>
     ${cats.length ? `<div class="card stack"><h3>Per kategori</h3>${cats.map(([c, v]) => `
       <div class="cat-row"><span>${esc(c)}</span><span class="small muted">${short(v)} · ${Math.round((v / expense) * 100) || 0}%</span>
-      <div class="bar ${c === 'Hobi & Gadget' ? 'bad' : ''}"><i style="width:${(v / maxCat) * 100}%"></i></div></div>`).join('')}</div>` : ''}
+      <div class="bar ${HOBBY_CATS.includes(c) ? 'bad' : ''}"><i style="width:${(v / maxCat) * 100}%"></i></div></div>`).join('')}</div>` : ''}
     <div class="segmented">
       ${[['all', 'Semua'], ['keluar', 'Keluar'], ['masuk', 'Masuk'], ['nabung', 'Kantong'], ['review', 'Perlu dicek']].map(([k, l]) => `<button class="${historyFilter === k ? 'on' : ''}" data-action="filter" data-filter="${k}" type="button">${l}</button>`).join('')}
     </div>

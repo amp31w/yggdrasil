@@ -3,8 +3,8 @@
 // Kategori dasar. Nama kategori liburan & kata kunci pribadi diatur lewat configureParser()
 // dari rencana yang tersimpan di Google Sheet (bukan di kode publik).
 const BASE_EXPENSE = [
-  'Makan & Kopi', 'Astro & Groceries', 'Transport', 'Tagihan Tetap', 'Sedekah',
-  'Pulang & Keluarga', 'Hobi & Gadget', 'Kesehatan', 'Lainnya',
+  'Makan & Kopi', 'Astro & Groceries', 'Transport', 'Tagihan Tetap', 'Langganan', 'Sedekah',
+  'Pulang & Keluarga', 'Game', 'Hobi & Gadget', 'Event & Hiburan', 'Rumah Tangga', 'Kesehatan', 'Lainnya',
 ];
 const INCOME = ['Gaji Utama', 'Gaji Sampingan', 'THR', 'Bonus', 'Pemasukan Lain'];
 
@@ -29,14 +29,21 @@ const escapeRe = s => s.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const TRIP = Symbol('trip');
 const EXPENSE_RULES = [
   [TRIP, /\b(paspor|passport|visa|tiket pesawat|pesawat|hotel|penginapan|airbnb)\b/],
-  ['Tagihan Tetap', /\b(kontrakan|kos|kost|sewa|listrik|token|pln|gemini|langganan|subscription|wifi|internet|pulsa|paket data|kuota)\b/],
-  ['Sedekah', /\b(sedekah|infaq|infak|zakat|donasi|amal|jumatan)\b/],
-  ['Pulang & Keluarga', /\b(pulang|mudik|oleh[- ]?oleh|keluarga|ortu|ibu|bapak|mamah|mama|papah)\b/],
-  ['Hobi & Gadget', /\b(game|games|steam|nintendo|switch|eshop|merch|figure|figurine|gacha|top ?up|keyboard|keycap|mouse|monitor|ram|gpu|vga|ssd|hdd|headphone|headset|gadget|akrilik|acrylic|manga|komik|anime|lightbar|lampu|peripheral|controller)\b/],
-  ['Kesehatan', /\b(obat|apotek|apotik|dokter|klinik|vitamin|bpjs|rs)\b/],
+  ['Tagihan Tetap', /\b(kontrakan|kos|kost|sewa|listrik|token|pln|paylater|paylayer|gopaylater|gopaylayer|cicilan|kredit)\b/],
+  ['Langganan', /\b(langganan|subscription|subscribe|gemini|claude|chatgpt|openai|spotify|netflix|youtube premium|disney|icloud|google one|canva|figma|groupy|pulsa|paket data|kuota|wifi|internet)\b/],
+  ['Sedekah', /\b(sedekah|infaq|infak|zakat|donasi|amal|jumatan|tip|tips)\b/],
+  // Transport dicek sebelum "pulang", supaya "kereta gojek pulang" tetap Transport.
   ['Transport', /\b(angkot|gojek|goride|gocar|grab|grabbike|krl|commuter|ojek|ojol|bensin|parkir|tol|transjakarta|tj|mrt|lrt|busway|kereta|maxim|bus)\b/],
-  ['Astro & Groceries', /\b(astro|belanja|groceries|grocery|bahan|sayur|beras|telur|minyak|galon|indomaret|alfamart|alfa|sabun|deterjen|tisu|sampo)\b/],
-  ['Makan & Kopi', /\b(makan|minum|ayam|geprek|nasi|kopi|coffee|kebab|burger|karaage|padang|mie|mi|bakso|sate|soto|martabak|roti|jajan|snack|teh|es|boba|gofood|grabfood|shopeefood|warteg|seblak|indomie|ramen|sushi|pizza|chicken|cafe|kafe|pcs|bubur|gorengan|pecel|lele|katsu|dimsum|susu|air|cemilan|camilan|sarapan|lunch|dinner|kue|buah|onigiri|cilok|ketoprak|siomay|batagor|gado|nasgor|mcd|kfc|warung|kantin|yogurt|donat)\b/],
+  ['Pulang & Keluarga', /\b(pulang|mudik|oleh[- ]?oleh|keluarga|ortu|ibu|bapak|mamah|mama|papah)\b/],
+  ['Game', /\b(game|games|steam|nintendo|switch|eshop|psn|playstation|xbox|gacha|top ?up|diamond|welkin|genshin|honkai|hsr|zzz|valorant|mlbb|mobile legends|monster hunter|blessing|battle pass|primogem)\b/],
+  ['Event & Hiburan', /\b(tiket|konser|event|bioskop|nonton|cgv|xxi|cinepolis|launching|festival|museum|karaoke|comiccon|comic con)\b/],
+  ['Hobi & Gadget', /\b(merch|figure|figurine|keyboard|keycap|mouse|mousepad|monitor|ram|gpu|vga|ssd|hdd|headphone|headset|earphone|gadget|akrilik|acrylic|standee|manga|komik|anime|hololive|lightbar|led|peripheral|controller|kabel|cable|coiled|ups|shelfdesk|desk|charger|powerbank)\b/],
+  ['Rumah Tangga', /\b(jemuran|pembersih|sabun|deterjen|tisu|sampo|sikat|galon|gas|ember|sapu|pel|hanger|gantungan|rak|lampu|seprai|bantal|handuk|pewangi)\b/],
+  ['Kesehatan', /\b(obat|apotek|apotik|dokter|klinik|vitamin|bpjs|rs)\b/],
+  ['Astro & Groceries', /\b(astro|belanja|groceries|grocery|bahan|sayur|beras|telur|minyak|indomaret|alfamart|alfa)\b/],
+  ['Makan & Kopi', /\b(makan|minum|ayam|geprek|nasi|kopi|coffee|coffe|kebab|shawarma|burger|karaage|padang|mie|mi|bihun|kwetiau|bakso|sate|soto|martabak|roti|rotio|croissant|jajan|jajanan|snack|keripik|teh|es|boba|jus|yakult|sosis|pocari|aqua|gofood|grabfood|shopeefood|warteg|seblak|indomie|ramen|sushi|pizza|chicken|cafe|kafe|pcs|bubur|gorengan|pecel|lele|katsu|dimsum|susu|air|cemilan|camilan|sarapan|lunch|dinner|kue|buah|onigiri|cilok|ketoprak|siomay|batagor|gado|nasgor|mcd|kfc|warung|kantin|yogurt|donat|alfamidi)\b/],
+  // Biaya kecil yang jelas jenisnya: tetap Lainnya, tapi tidak perlu dicek.
+  ['Lainnya', /\b(admin|biaya admin|biaya transfer)\b/],
 ];
 
 const INCOME_RULES = [
@@ -85,7 +92,8 @@ function categorize(type, text) {
 // Nominal tanpa tanda di mana pun dalam teks (dipakai untuk "-angkot 7k" atau segmen tanpa tanda).
 const UNSIGNED_RE = /(?<![\w.,])(rp\.?\s*)?(\d+(?:[.,]\d+)*)\s*(ribu|rb|juta|jt|k)?(?![a-z0-9])/gi;
 // Rincian struk belanja yang ditempel ("- 2x Air Mineral: Rp8.400", "- Total Ongkir: Rp5.000"): bukan transaksi.
-const RECEIPT_DETAIL = /^-\s+(\d+\s*x\b|total\b)/i;
+const RECEIPT_DETAIL = /^-\s+(\d+\s*x\b|total\b|[^:]+:\s*-?\s*rp)/i;
+const MONTH_AFTER = /^\s*(jan|feb|mar|apr|mei|may|jun|jul|agu|agt|aug|sep|okt|oct|nov|des|dec)[a-z]*\b/i;
 
 function findUnsignedAmount(text) {
   const tokens = [...text.matchAll(UNSIGNED_RE)];
@@ -102,13 +110,15 @@ function findUnsignedAmount(text) {
 export function parseLine(line, { implicitSign } = {}) {
   if (!line) return null;
   let text = clean(line);
+  if (RECEIPT_DETAIL.test(text)) return null;
   let sign, numStr, unit, matched;
-  const m = text.match(AMOUNT_RE);
+  let m = text.match(AMOUNT_RE);
+  // "- 22 Okt 2026" itu tanggal, bukan nominal.
+  if (m && !m[3] && MONTH_AFTER.test(text.slice(m.index + m[0].length))) m = null;
   if (m) {
     [matched, sign, numStr, unit] = m;
   } else {
     // "-angkot 7k", "-UPS 1,56 juta": tanda di depan teks, nominal di belakang.
-    if (RECEIPT_DETAIL.test(text)) return null;
     const lead = text.match(/^([+-])\s*/);
     sign = lead ? lead[1] : implicitSign;
     if (!sign) return null;
@@ -244,7 +254,8 @@ export function parseWhatsAppExport(raw) {
     const day = line.match(DAY_LINE);
     if (day) {
       const dayTs = `${ts.slice(0, 4)}-${pad(MONTH_NAMES[day[2].toLowerCase().slice(0, 3)])}-${pad(day[1])}T12:00`;
-      for (const seg of day[3].split(/[,;]/).map(s => s.trim()).filter(Boolean)) {
+      // Pisah per koma, kecuali koma desimal di antara angka ("1,66 juta").
+      for (const seg of day[3].split(/(?<!\d),|,(?!\d)|;/).map(s => s.trim()).filter(Boolean)) {
         const p = parseLine(seg, { implicitSign: '-' });
         if (p) add(dayTs, seg, p); else skipped.push({ ts: dayTs, line: seg });
       }
