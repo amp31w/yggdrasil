@@ -126,6 +126,15 @@ main { max-width: 680px; margin: 0 auto; padding: 4px 16px 0; }
 }
 .hero .safe b { font-size: 17px; }
 
+.balance { border: 2px solid var(--accent); }
+.balance .big { color: var(--good); }
+.balance.neg { border-color: var(--bad); }
+.balance.neg .big { color: var(--bad); }
+.balance .locks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.balance .locks b { color: var(--text); }
+.small-btn { min-height: 32px; padding: 4px 6px; font-size: 13px; }
+.wallet-row { display: grid; grid-template-columns: 1fr 1.2fr; gap: 8px; }
+
 /* ---------- Bars ---------- */
 .bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; position: relative; }
 .bar > i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.4s ease; }

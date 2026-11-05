@@ -1,4 +1,5 @@
 import { parseLine, parseWhatsAppExport, categories, configureParser, pocketCategory, hash } from './parser.js';
+import { carryOver, MAX_CUT } from './budget.js';
 
 // ---------------------------------------------------------------------------
 // Rencana keuangan
@@ -43,7 +44,7 @@ function normalizeSettings(s = {}) {
 // Penyimpanan lokal
 // ---------------------------------------------------------------------------
 function emptyState() {
-  return { settings: normalizeSettings(), payday: {}, checklist: {}, milestones: {}, wishlist: [], deletedIds: [], lastImport: null };
+  return { settings: normalizeSettings(), payday: {}, checklist: {}, milestones: {}, wishlist: [], deletedIds: [], lastImport: null, balanceChecks: [] };
 }
 
 function normalizeState(s = {}) {
@@ -252,19 +253,53 @@ const uid = p => p + '-' + Date.now().toString(36) + Math.random().toString(36).
 const allTx = () => Object.values(db.txns).sort((a, b) => b.ts.localeCompare(a.ts));
 const inRange = (t, from, to) => { const d = parseTs(t.ts); return d >= from && d < to; };
 
+function weekSpending(from) {
+  const cats = Object.keys(S().weekly);
+  const list = allTx().filter(t => t.type === 'keluar' && cats.includes(t.category) && inRange(t, from, addDays(from, 7)));
+  return { spent: sum(list), byCat: Object.fromEntries(cats.map(c => [c, sum(list.filter(t => t.category === c))])) };
+}
+
+// Potongan & hemat dihitung ulang dari awal bulan (reset saat gajian): hanya minggu yang Seninnya
+// jatuh di bulan berjalan yang dihitung. Aturannya ada di budget.js.
 function weekStats(now = new Date()) {
   const s = S();
-  const from = startOfWeek(now), to = addDays(from, 7);
-  const cats = Object.keys(s.weekly);
-  const list = allTx().filter(t => t.type === 'keluar' && cats.includes(t.category) && inRange(t, from, to));
-  const byCat = Object.fromEntries(cats.map(c => [c, sum(list.filter(t => t.category === c))]));
-  const budget = sum(cats, c => s.weekly[c]);
-  const spent = sum(list);
+  const from = startOfWeek(now);
+  const base = sum(Object.keys(s.weekly), c => s.weekly[c]);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const past = [];
+  for (let mon = addDays(monthStart, (8 - monthStart.getDay()) % 7); mon < from; mon = addDays(mon, 7)) {
+    past.push(weekSpending(mon).spent);
+  }
+  const { cut, carryLeft, savedMonth } = carryOver(base, past);
+  const { spent, byCat } = weekSpending(from);
+  const budget = base - cut;
   const remaining = budget - spent;
   const daysLeft = 7 - ((now.getDay() + 6) % 7);
   const firstDow = (new Date(now.getFullYear(), now.getMonth(), 1).getDay() + 6) % 7;
   const weekNo = Math.floor((now.getDate() - 1 + firstDow) / 7) + 1;
-  return { from, to: addDays(to, -1), byCat, budget, spent, remaining, daysLeft, safe: remaining / daysLeft, weekNo };
+  return {
+    from, to: addDays(from, 6), byCat, base, cut, carryLeft, savedMonth,
+    budget, spent, remaining, daysLeft, safe: remaining / daysLeft, weekNo,
+  };
+}
+
+// ---------- Saldo nyata (semua dompet dalam satu angka) ----------
+// Semua uang ada di satu rekening; Dana Darurat & Kantong liburan hanya "dikunci" di aplikasi.
+// Patokan: cek saldo terakhir + semua transaksi sesudahnya. Setoran ke kantong tidak mengubah total.
+const netEffect = t => (t.type === 'masuk' ? t.amount : t.type === 'keluar' || t.type === 'pakai' ? -t.amount : 0);
+
+function balanceNow() {
+  const last = db.state.balanceChecks.at(-1);
+  if (!last) return null;
+  // Waktu transaksi hanya sampai menit; di menit yang sama dengan cek, pakai waktu dicatat (updatedAt).
+  const after = t => t.ts > last.ts || (t.ts === last.ts && (t.updatedAt || 0) > (last.at || 0));
+  const total = last.total + sum(allTx().filter(after), netEffect);
+  const p = pockets();
+  const spendable = total - Math.max(0, p.dd) - Math.max(0, p.trip);
+  const today = startOfDay(new Date());
+  const payday = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const daysToPayday = Math.round((payday - today) / 864e5);
+  return { last, total, dd: p.dd, trip: p.trip, spendable, daysToPayday, perDay: spendable / daysToPayday, payday };
 }
 
 function weekStatus(w) {
@@ -413,8 +448,38 @@ function renderHome() {
   const monthlyBy = c => sum(month.filter(t => t.type === 'keluar' && (c === 'Lainnya' ? BUFFER_CATS.includes(t.category) : t.category === c)));
   const hobby = sum(month.filter(t => t.type === 'keluar' && HOBBY_CATS.includes(t.category)));
 
+  const bal = balanceNow();
+  const checkedAgo = bal ? Math.floor((startOfDay(now) - startOfDay(parseTs(bal.last.ts))) / 864e5) : null;
+  const balanceCard = bal ? `
+    <div class="card balance ${bal.spendable < 0 ? 'neg' : ''}">
+      <div class="card-head" style="margin-bottom:2px">
+        <h2>Boleh dipakai sampai gajian</h2>
+        <button class="btn ghost small-btn" data-action="balance" type="button">Cek saldo</button>
+      </div>
+      <div class="big">${rp(bal.spendable)}</div>
+      <div class="small muted">${bal.spendable < 0 ? 'Uang kantong ikut terpakai. Rem dulu & isi ulang kantongnya.' : `≈ ${rp(Math.max(0, bal.perDay))}/hari · ${bal.daysToPayday} hari lagi sampai ${fmtDay(bal.payday)}`}</div>
+      <div class="locks">
+        <span>Total semua dompet <b>${short(bal.total)}</b></span>
+        <span>🔒 Darurat <b>${short(bal.dd)}</b></span>
+        <span>🔒 ${esc(tripName())} <b>${short(bal.trip)}</b></span>
+      </div>
+      <div class="small muted" style="margin-top:6px">Cek saldo terakhir ${checkedAgo === 0 ? 'hari ini' : `${checkedAgo} hari lalu`}${checkedAgo >= 7 ? ' · <b>waktunya cek lagi</b>' : ''}</div>
+    </div>` : `
+    <div class="card balance stack">
+      <h3>Berapa uangmu sekarang?</h3>
+      <p class="hint">Masukkan saldo semua dompet sekali. Setelah itu aplikasi menghitung uang yang <b>boleh dipakai</b>, sudah dikurangi Dana Darurat & Kantong ${esc(tripName())}.</p>
+      <button class="btn primary" data-action="balance" type="button">Cek saldo</button>
+    </div>`;
+
+  const weekNote = w.cut
+    ? `<div class="small" style="margin-top:8px">Dipotong ${rp(w.cut)} karena minggu lalu over${w.carryLeft ? ` · ${short(w.carryLeft)} lagi dipotong minggu depan` : ''}</div>`
+    : w.remaining < 0
+      ? `<div class="small" style="margin-top:8px">Kelebihan ${rp(-w.remaining)} akan memotong kuota minggu depan (maks ${short(w.base * MAX_CUT)}).</div>`
+      : '';
+
   el.innerHTML = `
     ${banners.join('')}
+    ${balanceCard}
     <div class="card hero ${w.remaining < 0 ? 'over' : ''}">
       <div class="card-head" style="margin-bottom:4px">
         <h2>Sisa kuota minggu ${w.weekNo} · ${fmtDay(w.from)}–${fmtDay(w.to)}</h2>
@@ -422,7 +487,9 @@ function renderHome() {
       </div>
       <div class="big">${rp(w.remaining)} <small>/ ${short(w.budget)}</small></div>
       <div class="bar thick" style="margin-top:12px"><i style="width:${pct(w.remaining, w.budget)}%"></i></div>
+      ${weekNote}
       <div class="safe"><span>Aman dipakai per hari<br><span class="muted small">${w.daysLeft} hari lagi sampai Minggu</span></span><b>${rp(Math.max(0, w.safe))}</b></div>
+      ${w.savedMonth ? `<div class="small" style="margin-top:8px">Hemat bulan ini: ${rp(w.savedMonth)}, sapu ke Kantong ${esc(tripName())} saat gajian.</div>` : ''}
     </div>
 
     <div class="card stack">
@@ -584,6 +651,7 @@ function renderGoals() {
 const ICONS = {
   import: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   payday: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h3"/>',
+  wallet: '<path d="M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a1 1 0 0 1-1-1V7zM4 7l11-3v3M16 13.5h.01"/>',
   wish: '<circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2M9 3h6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1c.6.5 1.3.9 2 1.2L10 21h4l.5-2.6c.7-.3 1.4-.7 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/>',
@@ -596,6 +664,7 @@ function renderMore() {
   const item = (action, icon, t, d) => `<li><button data-action="${action}" type="button"><span class="ic"><svg viewBox="0 0 24 24">${ICONS[icon]}</svg></span><span><div class="t">${t}</div><div class="d">${d}</div></span></button></li>`;
   el.innerHTML = `
     <ul class="menu">
+      ${item('balance', 'wallet', 'Cek saldo', 'Cocokkan saldo semua dompet & lihat yang boleh dipakai')}
       ${item('payday', 'payday', 'SOP gajian tanggal 1', 'Checklist bagi gaji & setor ke kantong')}
       ${item('wishlist', 'wish', 'Wishlist 14 hari', waiting ? `${waiting} barang masih ditahan` : 'Tahan dulu keinginan belanja gadget')}
       ${item('help', 'help', 'Cara mencatat', 'Format singkat yang dikenali')}
@@ -1073,6 +1142,80 @@ function openWishlist() {
   });
 }
 
+// ---------- Cek saldo ----------
+const DEFAULT_WALLETS = ['Rekening', 'GoPay', 'OVO', 'Cash'];
+
+function openBalanceCheck() {
+  if (!requirePlan()) return;
+  const prev = db.state.balanceChecks.at(-1);
+  const names = prev ? Object.keys(prev.wallets) : DEFAULT_WALLETS;
+  const before = balanceNow(); // perkiraan dari catatan sejak cek terakhir
+  const row = (name = '') => `<div class="wallet-row">
+      <input class="input" data-wname value="${esc(name)}" placeholder="Nama dompet">
+      <input class="input" data-wamt inputmode="decimal" placeholder="0">
+    </div>`;
+  openSheet({
+    title: 'Cek saldo',
+    body: `
+      <p class="hint">Isi saldo <b>semua</b> tempat uangmu sekarang. Dana Darurat & Kantong ${esc(tripName())} otomatis dikurangkan, jadi yang tersisa adalah uang yang boleh dipakai.</p>
+      <div class="stack" data-wallets>${names.map(row).join('')}</div>
+      <button class="btn ghost" data-add-wallet type="button">+ Tambah dompet</button>
+      <div class="card stack" data-summary></div>
+    `,
+    foot: '<button class="btn primary" data-save type="button">Simpan</button>',
+    onMount(dlg, close) {
+      const $ = q => dlg.querySelector(q);
+      const read = () => {
+        const wallets = {};
+        dlg.querySelectorAll('.wallet-row').forEach(r => {
+          const name = r.querySelector('[data-wname]').value.trim();
+          const amt = money(r.querySelector('[data-wamt]').value);
+          if (name) wallets[name] = (wallets[name] || 0) + amt;
+        });
+        return { wallets, total: sum(Object.values(wallets), v => v) };
+      };
+      const draw = () => {
+        const { total } = read();
+        const p = pockets();
+        const spendable = total - Math.max(0, p.dd) - Math.max(0, p.trip);
+        const gap = before ? total - before.total : null;
+        const showGap = gap !== null && Math.abs(gap) >= 1000;
+        $('[data-summary]').innerHTML = `
+          <div class="row"><span>Total semua dompet</span><b>${rp(total)}</b></div>
+          <div class="row"><span>🔒 Dana Darurat</span><span>− ${rp(Math.max(0, p.dd))}</span></div>
+          <div class="row"><span>🔒 Kantong ${esc(tripName())}</span><span>− ${rp(Math.max(0, p.trip))}</span></div>
+          <div class="row" style="border-top:1px solid var(--line);padding-top:8px"><b>Boleh dipakai</b><b style="font-size:20px;color:${spendable < 0 ? 'var(--bad)' : 'var(--good)'}">${rp(spendable)}</b></div>
+          ${showGap ? `<div class="banner ${gap < 0 ? '' : 'info'}" style="margin-top:4px"><div>
+            <b>${gap < 0 ? `Kurang ${rp(-gap)} dari catatan` : `Lebih ${rp(gap)} dari catatan`}</b>
+            <div class="small">Menurut catatan seharusnya ${rp(before.total)}. ${gap < 0 ? 'Ada pengeluaran yang belum tercatat.' : 'Ada pemasukan yang belum tercatat.'}</div>
+            ${gap < 0 ? `<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" data-record-gap checked> Catat sebagai "pengeluaran tak tercatat"</label>` : ''}
+          </div></div>` : ''}
+        `;
+        return { gap, showGap };
+      };
+      dlg.addEventListener('input', draw);
+      $('[data-add-wallet]').addEventListener('click', () => { $('[data-wallets]').insertAdjacentHTML('beforeend', row()); });
+      draw();
+      $('[data-save]').addEventListener('click', () => {
+        const { wallets, total } = read();
+        if (!total) { toast('Isi minimal satu saldo'); return; }
+        const { gap, showGap } = draw();
+        const now = new Date();
+        if (showGap && gap < 0 && $('[data-record-gap]')?.checked) {
+          // Dicatat semenit sebelum cek, supaya tidak ikut mengurangi saldo sesudah cek.
+          putTxns([{ id: uid('gap'), ts: tsOf(new Date(now - 60000)), type: 'keluar', category: 'Lainnya', amount: -gap, note: 'Pengeluaran tak tercatat (selisih cek saldo)', source: 'app' }]);
+        }
+        setState(st => {
+          st.balanceChecks.push({ id: uid('bal'), ts: tsOf(now), at: Date.now(), total, wallets });
+          st.balanceChecks = st.balanceChecks.slice(-30);
+        });
+        toast(`Tersimpan. Boleh dipakai ${short(balanceNow().spendable)}`);
+        close();
+      });
+    },
+  });
+}
+
 // ---------- Pengaturan ----------
 function getPath(obj, path) { return path.split('.').reduce((o, k) => o?.[k], obj); }
 function setPath(obj, path, val) {
@@ -1305,7 +1448,9 @@ function submitComposer() {
   let msg = lead;
   if (S().configured) {
     const w = weekStats();
+    const bal = balanceNow();
     msg += ` · sisa minggu ini ${short(w.remaining)} (${short(Math.max(0, w.safe))}/hari)`;
+    if (bal) msg += ` · boleh dipakai ${short(bal.spendable)}`;
   }
   toast(msg, {
     label: 'Batalkan',
@@ -1355,6 +1500,7 @@ document.addEventListener('click', e => {
     case 'windfall': openWindfall(); break;
     case 'wishlist': openWishlist(); break;
     case 'settings': openSettings(); break;
+    case 'balance': openBalanceCheck(); break;
     case 'backup': openBackup(); break;
     case 'help': openHelp(); break;
     case 'milestone': toggleMilestone(el.dataset.id); break;
